@@ -4,11 +4,9 @@ from datetime import datetime
 import google.generativeai as genai
 import plotly.graph_objects as go
 import pandas as pd
-import sqlite3
-from pathlib import Path
 
 # Configure Gemini API
-genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", ""))
+genai.configure(api_key="AIzaSyCo1TgO60NwadRjwit5Qhc4CmschHsRsCE")
 
 # Page config
 st.set_page_config(page_title="SCM Game Bot", page_icon="🏭", layout="wide")
@@ -44,153 +42,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Database setup
-DB_PATH = Path("scm_game_leaderboard.db")
-
-def init_database():
-    """Initialize SQLite database for leaderboard"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS leaderboard (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            player_name TEXT NOT NULL,
-            client_type TEXT NOT NULL,
-            avg_score REAL NOT NULL,
-            cost_efficiency INTEGER NOT NULL,
-            customer_satisfaction INTEGER NOT NULL,
-            resilience INTEGER NOT NULL,
-            sustainability INTEGER NOT NULL,
-            timestamp TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    # Create index for faster queries
-    cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_avg_score 
-        ON leaderboard(avg_score DESC)
-    """)
-    
-    conn.commit()
-    conn.close()
-
-def add_to_database(player_name, client_type, scores):
-    """Add player's performance to database"""
-    avg_score = sum(scores.values()) / len(scores)
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        INSERT INTO leaderboard 
-        (player_name, client_type, avg_score, cost_efficiency, 
-         customer_satisfaction, resilience, sustainability, timestamp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        player_name,
-        client_type,
-        round(avg_score, 1),
-        scores['cost_efficiency'],
-        scores['customer_satisfaction'],
-        scores['resilience'],
-        scores['sustainability'],
-        timestamp
-    ))
-    
-    conn.commit()
-    conn.close()
-    
-    return cursor.lastrowid
-
-def get_leaderboard(limit=10):
-    """Get top scores from database"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT player_name, client_type, avg_score, 
-               cost_efficiency, customer_satisfaction, 
-               resilience, sustainability, timestamp
-        FROM leaderboard
-        ORDER BY avg_score DESC, created_at DESC
-        LIMIT ?
-    """, (limit,))
-    
-    results = cursor.fetchall()
-    conn.close()
-    
-    leaderboard = []
-    for row in results:
-        leaderboard.append({
-            'name': row[0],
-            'client': row[1],
-            'avg_score': row[2],
-            'cost_efficiency': row[3],
-            'customer_satisfaction': row[4],
-            'resilience': row[5],
-            'sustainability': row[6],
-            'timestamp': row[7]
-        })
-    
-    return leaderboard
-
-def get_player_rank(player_name, current_avg_score):
-    """Get player's rank in the leaderboard"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Get count of scores better than current
-    cursor.execute("""
-        SELECT COUNT(*) + 1
-        FROM leaderboard
-        WHERE avg_score > ?
-    """, (current_avg_score,))
-    
-    rank = cursor.fetchone()[0]
-    conn.close()
-    
-    return rank
-
-def get_total_players():
-    """Get total number of players in database"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT COUNT(DISTINCT player_name) FROM leaderboard")
-    count = cursor.fetchone()[0]
-    
-    conn.close()
-    return count
-
-def get_player_stats(player_name):
-    """Get statistics for a specific player"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT COUNT(*), AVG(avg_score), MAX(avg_score), MIN(avg_score)
-        FROM leaderboard
-        WHERE player_name = ?
-    """, (player_name,))
-    
-    result = cursor.fetchone()
-    conn.close()
-    
-    if result[0] > 0:
-        return {
-            'games_played': result[0],
-            'avg_score': round(result[1], 1),
-            'best_score': round(result[2], 1),
-            'worst_score': round(result[3], 1)
-        }
-    return None
-
-# Initialize database on app start
-init_database()
-
 # Initialize session state
 if 'game_state' not in st.session_state:
     st.session_state.game_state = {
@@ -207,8 +58,7 @@ if 'game_state' not in st.session_state:
         'feedback_history': [],
         'current_scenario': None,
         'decision_made': False,
-        'selected_choice': None,
-        'player_name': None
+        'selected_choice': None
     }
 
 # SCM Game Prompt Template
@@ -395,171 +245,7 @@ def get_scenario_from_gemini(client_type, stage_name, scenario_number, scores, p
 
 def create_fallback_scenario(stage_name):
     """Create a fallback scenario if LLM fails"""
-    
-    fallback_scenarios = {
-        "Planning": {
-            "scenario_title": "Demand Forecasting Crisis",
-            "scenario_description": "Market analysts predict a 40% surge in demand next quarter, but your current inventory capacity can only handle 20% growth. You need to decide how to prepare your supply chain.",
-            "context": "Historical data shows similar surges have led to stockouts and lost customers.",
-            "options": [
-                {
-                    "id": "A",
-                    "text": "Increase inventory levels aggressively by 50% to meet projected demand",
-                    "impact": {"cost_efficiency": -12, "customer_satisfaction": 10, "resilience": 8, "sustainability": -8},
-                    "feedback": "You captured market opportunity but increased holding costs and waste. Excess inventory ties up capital."
-                },
-                {
-                    "id": "B",
-                    "text": "Use just-in-time ordering with multiple backup suppliers",
-                    "impact": {"cost_efficiency": 5, "customer_satisfaction": -5, "resilience": 12, "sustainability": 8},
-                    "feedback": "Lower inventory costs but some delivery delays occurred. Strong supplier network helped manage risks."
-                },
-                {
-                    "id": "C",
-                    "text": "Maintain current levels and implement demand management strategies",
-                    "impact": {"cost_efficiency": 8, "customer_satisfaction": -10, "resilience": -5, "sustainability": 5},
-                    "feedback": "Controlled costs but lost market share to competitors who stocked adequately."
-                },
-                {
-                    "id": "D",
-                    "text": "Partner with third-party logistics for flexible capacity scaling",
-                    "impact": {"cost_efficiency": -5, "customer_satisfaction": 8, "resilience": 10, "sustainability": 3},
-                    "feedback": "Moderate costs with good flexibility. Partnership fees reduced margins slightly."
-                }
-            ],
-            "learning_point": "Demand forecasting requires balancing inventory costs against potential lost sales. Flexibility often outperforms pure efficiency."
-        },
-        "Sourcing": {
-            "scenario_title": "Supplier Reliability vs Cost",
-            "scenario_description": "Your primary supplier offers the lowest prices but has a history of quality issues and late deliveries. Alternative suppliers cost 15% more but have better track records.",
-            "context": "Recent customer complaints about product defects have increased by 25%.",
-            "options": [
-                {
-                    "id": "A",
-                    "text": "Switch entirely to premium suppliers despite higher costs",
-                    "impact": {"cost_efficiency": -15, "customer_satisfaction": 12, "resilience": 10, "sustainability": 8},
-                    "feedback": "Quality improved dramatically and customer satisfaction soared, but profit margins tightened significantly."
-                },
-                {
-                    "id": "B",
-                    "text": "Maintain current supplier but implement strict quality controls",
-                    "impact": {"cost_efficiency": -8, "customer_satisfaction": 5, "resilience": -5, "sustainability": 0},
-                    "feedback": "Quality improved somewhat but inspection costs added up. Some defects still reached customers."
-                },
-                {
-                    "id": "C",
-                    "text": "Use a dual-sourcing strategy with 60% from current, 40% from premium",
-                    "impact": {"cost_efficiency": -8, "customer_satisfaction": 8, "resilience": 12, "sustainability": 5},
-                    "feedback": "Balanced approach provided flexibility and improved overall quality while managing costs."
-                },
-                {
-                    "id": "D",
-                    "text": "Invest in supplier development program for current vendor",
-                    "impact": {"cost_efficiency": -10, "customer_satisfaction": 3, "resilience": 5, "sustainability": 10},
-                    "feedback": "Long-term investment showed promise but immediate improvements were limited. Building strong partnerships takes time."
-                }
-            ],
-            "learning_point": "Sourcing decisions must balance cost, quality, and risk. The cheapest option often has hidden costs in quality issues and disruptions."
-        },
-        "Manufacturing": {
-            "scenario_title": "Production Line Breakdown",
-            "scenario_description": "A critical manufacturing line has failed, reducing capacity by 30%. Repairs will take 2 weeks. You have orders to fulfill and penalties for late delivery.",
-            "context": "Peak season is approaching and competitors are actively courting your customers.",
-            "options": [
-                {
-                    "id": "A",
-                    "text": "Outsource production to a contract manufacturer at premium rates",
-                    "impact": {"cost_efficiency": -15, "customer_satisfaction": 10, "resilience": 5, "sustainability": -5},
-                    "feedback": "Met all delivery deadlines but significantly reduced profit margins. Customer loyalty remained strong."
-                },
-                {
-                    "id": "B",
-                    "text": "Run overtime shifts on remaining lines at 150% capacity",
-                    "impact": {"cost_efficiency": -10, "customer_satisfaction": 5, "resilience": -8, "sustainability": -12},
-                    "feedback": "Partially met demand but equipment stress led to additional failures. Worker fatigue increased defect rates."
-                },
-                {
-                    "id": "C",
-                    "text": "Prioritize key customers and negotiate delayed delivery for others",
-                    "impact": {"cost_efficiency": 5, "customer_satisfaction": -12, "resilience": 3, "sustainability": 5},
-                    "feedback": "Protected important relationships but lost several medium-sized accounts to competitors."
-                },
-                {
-                    "id": "D",
-                    "text": "Deploy emergency repair team with expedited parts at high cost",
-                    "impact": {"cost_efficiency": -12, "customer_satisfaction": 8, "resilience": 10, "sustainability": 0},
-                    "feedback": "Line restored in 5 days instead of 14. High repair costs but avoided most customer penalties."
-                }
-            ],
-            "learning_point": "Manufacturing disruptions require quick decisions. Having contingency plans and backup capacity is crucial for resilience."
-        },
-        "Delivery/Logistics": {
-            "scenario_title": "Transportation Cost Surge",
-            "scenario_description": "Fuel prices have spiked 40% and shipping costs have doubled due to global events. Your logistics budget is now severely strained.",
-            "context": "Customers expect free or low-cost shipping, and competitors are absorbing some costs.",
-            "options": [
-                {
-                    "id": "A",
-                    "text": "Pass shipping costs to customers through price increases",
-                    "impact": {"cost_efficiency": 10, "customer_satisfaction": -15, "resilience": 5, "sustainability": 0},
-                    "feedback": "Protected margins but lost price-sensitive customers. Sales volume dropped 20%."
-                },
-                {
-                    "id": "B",
-                    "text": "Absorb all increased costs to maintain competitive pricing",
-                    "impact": {"cost_efficiency": -15, "customer_satisfaction": 10, "resilience": -5, "sustainability": -5},
-                    "feedback": "Maintained customer base but quarterly profits turned negative. Unsustainable long-term."
-                },
-                {
-                    "id": "C",
-                    "text": "Optimize routes and consolidate shipments to reduce frequency",
-                    "impact": {"cost_efficiency": 8, "customer_satisfaction": -5, "resilience": 8, "sustainability": 12},
-                    "feedback": "Reduced costs through efficiency but slightly longer delivery times. Environmental benefits were positive."
-                },
-                {
-                    "id": "D",
-                    "text": "Switch to multimodal transport and negotiate long-term carrier contracts",
-                    "impact": {"cost_efficiency": 5, "customer_satisfaction": 3, "resilience": 12, "sustainability": 8},
-                    "feedback": "Secured stable rates and improved flexibility. Diversified transport options reduced vulnerability."
-                }
-            ],
-            "learning_point": "Logistics optimization balances cost, speed, and reliability. Building strong carrier relationships and route flexibility is key."
-        },
-        "Returns/After-sales": {
-            "scenario_title": "Product Recall Decision",
-            "scenario_description": "Quality testing has revealed a potential defect in 5% of your shipped products. The defect causes minor performance issues but no safety risks.",
-            "context": "News of the issue has leaked on social media. Your reputation is at stake.",
-            "options": [
-                {
-                    "id": "A",
-                    "text": "Issue full recall and replace all potentially affected units",
-                    "impact": {"cost_efficiency": -15, "customer_satisfaction": 15, "resilience": 8, "sustainability": -10},
-                    "feedback": "Customers praised your proactive response. High costs but brand loyalty increased significantly."
-                },
-                {
-                    "id": "B",
-                    "text": "Offer free repairs only to customers who report issues",
-                    "impact": {"cost_efficiency": 5, "customer_satisfaction": -8, "resilience": -5, "sustainability": 3},
-                    "feedback": "Lower costs but negative PR escalated. Social media sentiment turned against your brand."
-                },
-                {
-                    "id": "C",
-                    "text": "Implement enhanced warranty and preventive service program",
-                    "impact": {"cost_efficiency": -8, "customer_satisfaction": 10, "resilience": 10, "sustainability": 5},
-                    "feedback": "Balanced approach that caught defects early. Built trust through extended support."
-                },
-                {
-                    "id": "D",
-                    "text": "Provide software updates and extended monitoring for all units",
-                    "impact": {"cost_efficiency": -5, "customer_satisfaction": 5, "resilience": 8, "sustainability": 12},
-                    "feedback": "Innovative solution that prevented waste. Some customers wanted physical replacements though."
-                }
-            ],
-            "learning_point": "Returns management affects brand reputation and customer lifetime value. Proactive response to quality issues builds trust despite short-term costs."
-        }
-    }
-    
-    return fallback_scenarios.get(stage_name, {
+    return {
         "scenario_title": f"{stage_name} Challenge",
         "scenario_description": "Your team needs to make a critical decision to optimize the supply chain.",
         "context": "This is a standard scenario while we resolve technical issues.",
@@ -571,7 +257,7 @@ def create_fallback_scenario(stage_name):
                 "feedback": "You saved costs but may have compromised other areas."
             },
             {
-                "id": "B",
+                "id": "B", 
                 "text": "Balance all factors with a moderate investment",
                 "impact": {"cost_efficiency": 0, "customer_satisfaction": 5, "resilience": 5, "sustainability": 5},
                 "feedback": "A balanced approach that maintains stability."
@@ -584,7 +270,7 @@ def create_fallback_scenario(stage_name):
             }
         ],
         "learning_point": f"Understanding trade-offs in {stage_name} decisions"
-    })
+    }
 
 
 def generate_performance_analysis(scores, decisions, feedback_history, client_type):
@@ -625,7 +311,7 @@ Make the analysis highly personalized based on their actual scores and decision 
 Return ONLY the JSON object."""
 
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash-lite")
+        model = genai.GenerativeModel("gemini-2.0-flash-exp")
         response = model.generate_content(
             prompt,
             generation_config={
@@ -715,89 +401,6 @@ def render_progress_bar():
         st.caption(f"Stage {stage} of {len(STAGES)} • Scenario {scenario + 1} of 2")
 
 
-def add_to_leaderboard(player_name, client_type, scores):
-    """Add player's performance to leaderboard (legacy function for compatibility)"""
-    return add_to_database(player_name, client_type, scores)
-
-
-def render_leaderboard():
-    """Display the leaderboard from database"""
-    leaderboard = get_leaderboard(10)
-    total_players = get_total_players()
-    
-    if not leaderboard:
-        st.info("🏆 Be the first to complete the game and claim the top spot!")
-        return
-    
-    st.markdown(f"### 🏆 Top 10 Supply Chain Consultants")
-    st.caption(f"Total players: {total_players}")
-    
-    # Create leaderboard dataframe
-    df = pd.DataFrame(leaderboard)
-    
-    # Add rank column
-    df.insert(0, 'Rank', range(1, len(df) + 1))
-    
-    # Format for display
-    display_df = df[['Rank', 'name', 'client', 'avg_score', 'cost_efficiency', 
-                     'customer_satisfaction', 'resilience', 'sustainability', 'timestamp']]
-    
-    display_df.columns = ['🏅 Rank', '👤 Player', '🏢 Client', '⭐ Avg Score', 
-                          '💰 Cost', '😊 Customer', '🛡️ Resilience', '🌱 Sustain', '📅 Date']
-    
-    # Style the dataframe with custom colors
-    def style_leaderboard(row):
-        # Highlight current player
-        if row['👤 Player'] == st.session_state.game_state.get('player_name'):
-            return ['background-color: #fffacd; color: #000000; font-weight: bold'] * len(row)
-        # Color top 3 differently
-        elif row['🏅 Rank'] == 1:
-            return ['background-color: #FFD700; color: #000000; font-weight: bold'] * len(row)
-        elif row['🏅 Rank'] == 2:
-            return ['background-color: #C0C0C0; color: #000000; font-weight: bold'] * len(row)
-        elif row['🏅 Rank'] == 3:
-            return ['background-color: #CD7F32; color: #000000; font-weight: bold'] * len(row)
-        return ['color: #1f1f1f'] * len(row)
-    
-    styled_df = display_df.style.apply(style_leaderboard, axis=1)
-    
-    st.dataframe(styled_df, width='stretch', hide_index=True)
-    
-    # Add medals for top 3
-    if len(leaderboard) >= 1:
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            if len(leaderboard) >= 1:
-                leader = leaderboard[0]
-                st.markdown(f"""
-                🥇 **1st Place**  
-                **{leader['name']}**  
-                Score: {leader['avg_score']}%  
-                Client: {leader['client']}
-                """)
-        
-        with col2:
-            if len(leaderboard) >= 2:
-                second = leaderboard[1]
-                st.markdown(f"""
-                🥈 **2nd Place**  
-                **{second['name']}**  
-                Score: {second['avg_score']}%  
-                Client: {second['client']}
-                """)
-        
-        with col3:
-            if len(leaderboard) >= 3:
-                third = leaderboard[2]
-                st.markdown(f"""
-                🥉 **3rd Place**  
-                **{third['name']}**  
-                Score: {third['avg_score']}%  
-                Client: {third['client']}
-                """)
-
-
 def main():
     # Header
     st.markdown('<h1 class="main-header">🏭 Supply Chain Management Game</h1>', unsafe_allow_html=True)
@@ -839,9 +442,7 @@ def main():
         
         st.markdown("---")
         
-        if st.button("🔄 Restart Game", type="secondary", use_container_width=True):
-            # Keep player name for next game
-            player_name = st.session_state.game_state.get('player_name')
+        if st.button("🔄 Restart Game", type="secondary", width='stretch'):
             st.session_state.game_state = {
                 'stage': 0,
                 'scenario': 0,
@@ -856,8 +457,7 @@ def main():
                 'feedback_history': [],
                 'current_scenario': None,
                 'decision_made': False,
-                'selected_choice': None,
-                'player_name': player_name
+                'selected_choice': None
             }
             st.rerun()
     
@@ -868,50 +468,6 @@ def main():
         
         with col2:
             st.markdown("### Welcome to the SCM Simulation! 🎮")
-            
-            # Show leaderboard first at the top
-            st.markdown("---")
-            render_leaderboard()
-            st.markdown("---")
-            
-            # Player name input
-            if not st.session_state.game_state.get('player_name'):
-                st.markdown("### 👤 Enter Your Name")
-                player_name = st.text_input("Your name will appear on the leaderboard:", 
-                                            placeholder="Enter your name",
-                                            label_visibility="collapsed")
-                
-                if player_name and len(player_name.strip()) > 0:
-                    st.session_state.game_state['player_name'] = player_name.strip()
-                    st.success(f"Welcome, {player_name}! 👋")
-                    
-                    # Show player stats if they've played before
-                    stats = get_player_stats(player_name.strip())
-                    if stats:
-                        st.info(f"""
-                        **Your Stats:**  
-                        🎮 Games Played: {stats['games_played']}  
-                        ⭐ Average Score: {stats['avg_score']}%  
-                        🏆 Best Score: {stats['best_score']}%
-                        """)
-                else:
-                    st.warning("Please enter your name to continue")
-            else:
-                player_name = st.session_state.game_state['player_name']
-                st.success(f"Welcome back, {player_name}! 👋")
-                
-                # Show player stats
-                stats = get_player_stats(player_name)
-                if stats:
-                    col_a, col_b, col_c = st.columns(3)
-                    with col_a:
-                        st.metric("🎮 Games Played", stats['games_played'])
-                    with col_b:
-                        st.metric("⭐ Avg Score", f"{stats['avg_score']}%")
-                    with col_c:
-                        st.metric("🏆 Best Score", f"{stats['best_score']}%")
-            
-            st.markdown("---")
             
             with st.expander("📚 What is Supply Chain Management?", expanded=True):
                 st.markdown("""
@@ -975,12 +531,9 @@ def main():
             st.markdown("")
             
             if st.button("🎮 Start Game", type="primary", width='stretch'):
-                if st.session_state.game_state.get('player_name'):
-                    st.session_state.game_state['stage'] = 1
-                    st.session_state.game_state['scenario'] = 0
-                    st.rerun()
-                else:
-                    st.error("Please enter your name first!")
+                st.session_state.game_state['stage'] = 1
+                st.session_state.game_state['scenario'] = 0
+                st.rerun()
     
     elif st.session_state.game_state['stage'] <= len(STAGES):
         # Game in progress
@@ -1023,7 +576,7 @@ def main():
                     if st.button(
                         f"**Option {option['id']}**\n\n{option['text']}", 
                         key=f"opt_{option['id']}",
-                        use_container_width=True,
+                        width='stretch',
                         type="secondary"
                     ):
                         st.session_state.game_state['selected_choice'] = option
@@ -1083,7 +636,7 @@ def main():
             
             # Continue button
             if st.session_state.game_state['scenario'] < 1:
-                if st.button("➡️ Continue to Next Scenario", type="primary", use_container_width=True):
+                if st.button("➡️ Continue to Next Scenario", type="primary", width='stretch'):
                     st.session_state.game_state['scenario'] += 1
                     st.session_state.game_state['decision_made'] = False
                     st.session_state.game_state['selected_choice'] = None
@@ -1092,7 +645,7 @@ def main():
                     st.session_state.game_state['decisions'][-1]['timestamp'] = datetime.now().isoformat()
                     st.rerun()
             else:
-                if st.button("➡️ Continue to Next Stage", type="primary", use_container_width=True):
+                if st.button("➡️ Continue to Next Stage", type="primary", width='stretch'):
                     st.session_state.game_state['stage'] += 1
                     st.session_state.game_state['scenario'] = 0
                     st.session_state.game_state['decision_made'] = False
@@ -1107,34 +660,8 @@ def main():
         st.markdown("## 🎯 Game Complete - Performance Report")
         st.balloons()
         
-        # Add to leaderboard (only once)
-        if 'added_to_leaderboard' not in st.session_state:
-            add_to_leaderboard(
-                st.session_state.game_state['player_name'],
-                st.session_state.game_state['client_type'],
-                st.session_state.game_state['scores']
-            )
-            st.session_state.added_to_leaderboard = True
-        
         # Performance metrics
         scores = st.session_state.game_state['scores']
-        
-        # Calculate average score
-        avg_score = sum(scores.values()) / len(scores)
-        
-        # Show player rank
-        player_rank = get_player_rank(st.session_state.game_state['player_name'], avg_score)
-        
-        if player_rank:
-            if player_rank == 1:
-                st.success(f"🏆 **Congratulations {st.session_state.game_state['player_name']}!** You're #1 on the leaderboard!")
-            elif player_rank <= 3:
-                st.info(f"🎉 **Great job {st.session_state.game_state['player_name']}!** You're #{player_rank} on the leaderboard!")
-            elif player_rank <= 10:
-                st.info(f"👏 **Well done {st.session_state.game_state['player_name']}!** You ranked #{player_rank}!")
-            else:
-                st.info(f"📊 **Good effort {st.session_state.game_state['player_name']}!** You ranked #{player_rank}. Keep playing to improve!")
-        
         col1, col2, col3, col4 = st.columns(4)
         
         metrics = [
@@ -1154,7 +681,7 @@ def main():
         col1, col2 = st.columns([2, 1])
         
         with col1:
-            st.plotly_chart(render_dashboard(scores), use_container_width=True)
+            st.plotly_chart(render_dashboard(scores), width='stretch')
         
         with col2:
             avg_score = sum(scores.values()) / len(scores)
@@ -1170,14 +697,6 @@ def main():
                 st.error("📚 **Learning Opportunity**\n\nReview feedback to improve.")
             
             st.metric("Average Score", f"{avg_score:.1f}%")
-            
-            # Show player's personal best
-            player_stats = get_player_stats(st.session_state.game_state['player_name'])
-            if player_stats and player_stats['games_played'] > 1:
-                if avg_score >= player_stats['best_score']:
-                    st.success(f"🎉 New Personal Best!")
-                else:
-                    st.info(f"Your best: {player_stats['best_score']}%")
         
         st.markdown("---")
         
@@ -1214,12 +733,6 @@ def main():
         
         st.markdown("---")
         
-        # Leaderboard
-        st.markdown("### 🏆 Leaderboard")
-        render_leaderboard()
-        
-        st.markdown("---")
-        
         # Decision history
         st.markdown("### 📋 Your Decision Journey")
         if st.session_state.game_state['decisions']:
@@ -1237,13 +750,7 @@ def main():
         
         st.markdown("")
         
-        if st.button("🎮 Play Again", type="primary", use_container_width=True):
-            # Clear the added_to_leaderboard flag
-            if 'added_to_leaderboard' in st.session_state:
-                del st.session_state.added_to_leaderboard
-            
-            # Keep player name for next game
-            player_name = st.session_state.game_state['player_name']
+        if st.button("🎮 Play Again", type="primary", width='stretch'):
             st.session_state.game_state = {
                 'stage': 0,
                 'scenario': 0,
@@ -1258,8 +765,7 @@ def main():
                 'feedback_history': [],
                 'current_scenario': None,
                 'decision_made': False,
-                'selected_choice': None,
-                'player_name': player_name
+                'selected_choice': None
             }
             st.rerun()
 
